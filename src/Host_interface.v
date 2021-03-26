@@ -3,7 +3,7 @@
 //Date        : 2021-01-29
 //Host        : Duheon
 //Design      : Host_interface
-//Version     : 0.1
+//Version     : 0.2
 //--------------------------------------------------------------------------------
 `timescale 1 ns / 1 ps
 `define C_LOG_2(n) (\

@@ -36,15 +36,13 @@ module simple_ram
     input [width-1:0] 	   data,
     
     input [widthad-1:0]    rdaddress,
-    output reg [width-1:0] q
+    output wire [width-1:0] q
     );
 
 reg [width-1:0] mem [(2**widthad)-1:0];
 
 always @(posedge clk) begin
     if(wren) mem[wraddress] <= data;
-    
-    q <= mem[rdaddress];
-end
-
+ end   
+assign  q = mem[rdaddress];
 endmodule

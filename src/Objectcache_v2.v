@@ -1,9 +1,9 @@
 //--------------------------------------------------------------------------------
 //Tool Version: Vivado v.2019.1 (win64) 
-//Date        : 2021-02-09
+//Date        : 2021-03-03
 //Host        : Duheon
 //Design      : Object cache
-//Version     : 0.1
+//Version     : 1.0
 //--------------------------------------------------------------------------------
 `timescale 1 ns / 1 ps
 `define C_LOG_2(n) (\
@@ -29,7 +29,10 @@ module objectCache #(
 	parameter integer LINE_SIZE_BYTE = 64,
 	parameter integer ADDR_WIDTH = 40,
 	parameter integer NUM_ENTRY_BIT = 1,
-	parameter integer WORD_SIZE = WORD_SIZE_BYTE*8
+	parameter integer WORD_SIZE = WORD_SIZE_BYTE*8,
+	parameter integer LINE_SIZE = LINE_SIZE_BYTE*8,
+	parameter integer OBJECT_ID = 1,
+	parameter integer OBJECT_ID_WIDTH_BIT = 2
 ) (
 	input wire aclk,
 	input wire aresetn,
@@ -38,55 +41,60 @@ module objectCache #(
 	input wire [WORD_SIZE-1:0] s_wdata,
 	input wire s_ren,
 	input wire s_wen,
-	output reg [WORD_SIZE-1:0] s_rdata,
-	output reg s_data_valid,
+	output wire [WORD_SIZE-1:0] s_rdata,
+	output wire s_data_valid,
 	//master port
-	output reg [ADDR_WIDTH-1:0] m_addr,
-	output reg [WORD_SIZE-1:0] m_wdata,
+	output reg [ADDR_WIDTH-1:0] m_raddr,
+	output reg [ADDR_WIDTH-1:0] m_waddr,
+	output reg [LINE_SIZE-1:0] m_wdata,
 	output reg m_ren,
 	output reg m_wen,
-	input wire [WORD_SIZE-1:0] m_rdata,
+	input wire [LINE_SIZE-1:0] m_rdata,
 	input wire m_rdata_valid,
-	input wire m_ready
+	input wire m_rready,
+	input wire m_wready
 );
 	
-	localparam [8:0]
-		S_IDLE = 0,
-		S_CMP = 1,
-		S_HIT = 2,
-		S_FETCH_1 = 4,
-		S_FETCH_2 = 8,
-		S_FETCH_3 = 16,
-		S_WB_1 = 32,
-		S_WB_2 = 64;
-		S_ERROR = 128;
-	localparam STATE_BIT = 9;
-	localparam WORD_OFFSET = 'C_LOG_2(LINE_SIZE_BYTE/WORD_SIZE_BYTE);
-		
+	localparam STATE_BIT = 8;
+	localparam [STATE_BIT-1:0]
+		S_RUN = 1,
+		S_FETCH_1 = 2,
+		S_FETCH_2 = 4,
+		S_FETCH_3 = 8,
+		S_WB_1 = 16,
+		S_WB_2 = 32,
+		S_ERROR = 64;
+	localparam [STATE_BIT-1:0]
+		S_RUN_BIT = 0,
+		S_FETCH_1_BIT = 1,
+		S_FETCH_2_BIT = 2,
+		S_FETCH_3_BIT = 3,
+		S_WB_1_BIT = 4,
+		S_WB_2_BIT = 5,
+		S_ERROR_BIT = 6;	
+	localparam WORD_OFFSET = `C_LOG_2(LINE_SIZE_BYTE/WORD_SIZE_BYTE);
+	localparam BYTE_OFFSET = `C_LOG_2(WORD_SIZE_BYTE);
+	localparam LINE_SIZE_BIT = `C_LOG_2(LINE_SIZE_BYTE);
+	
 	wire [NUM_ENTRY_BIT-1:0] entry;
-	wire [ADDR_WIDTH-NUM_ENTRY_BIT-1:0] o_tag;
+	wire [ADDR_WIDTH-NUM_ENTRY_BIT-LINE_SIZE_BIT-1:0] o_tag;
 	wire [LINE_SIZE_BYTE*8-1:0] writedata;
-	reg [LINE_SIZE_BYTE*8-1:0] writedata_buf;
 	wire [WORD_SIZE_BYTE-1:0] byte_en;
-	wire set_write;
-	wire hit_write;
 	wire [LINE_SIZE_BYTE/WORD_SIZE_BYTE-1:0] word_en;
 	wire [LINE_SIZE_BYTE*8-1:0] readdata;
+	wire [ADDR_WIDTH-1:0] wb_addr;
 	wire hit;
 	wire modify;
 	wire miss;
 	wire valid;
 	wire read_miss;
-	reg s_ren_buf, s_wen_buf;
-	
-	assign entry = (Cache_CS==S_FETCH&&m_rdata_valid) ? m_addr[ADDR_WIDTH-1:NUM_ENTRY_BIT] : s_addr[ADDR_WIDTH-1:NUM_ENTRY_BIT];
-	assign o_tag = (Cache_CS==S_FETCH&&m_rdata_valid) ? m_addr[NUM_ENTRY_BIT-1:0] : s_addr[NUM_ENTRY_BIT-1:0];
+	wire set_write, hit_write;
 		
 	set #(
 		.WORD_SIZE_BYTE(WORD_SIZE_BYTE),
 		.LINE_SIZE_BYTE(LINE_SIZE_BYTE),
 		.ADDR_WIDTH(ADDR_WIDTH),
-		.NUM_ENTRY_BIT(NUM_ENTRY_BIT),
+		.NUM_ENTRY_BIT(NUM_ENTRY_BIT)
 	)
 	set0(
 		.aclk		(aclk),
@@ -98,42 +106,34 @@ module objectCache #(
 		.write      (set_write),
 		.word_en    (word_en),
 		.readdata   (readdata),
+		.wb_addr	(wb_addr),
 		.hit        (hit),
 		.modify     (modify),
 		.miss       (miss),
 		.valid      (valid),
-		.read_miss	(read_miss),
-		.invalid    (0)
+		.read_miss	((s_ren&&!s_wen)),
+		.invalid    (1'b0)
 	);
-	assign byte_en = {{WORD_SIZE_BYTE}1'b1}
-
+	
 	reg [STATE_BIT-1:0] Cache_CS, Cache_NS;
 	always @(*) begin	
 		case(Cache_CS)
-			S_IDLE: begin
-				if(s_wen||s_ren) begin
-					Cache_NS = S_CMP;
-				end
-				else begin
-					Cache_NS = S_IDLE;
-				end
-			end
-			S_CMP: begin
-				if(hit) begin
-					Cache_NS = S_HIT;
-				end
-				else if(miss&modify) begin
-					Cache_NS = S_WB;
-				end
-				else if(miss&~modify) begin
+			S_RUN: begin
+				if(miss) begin
 					Cache_NS = S_FETCH_1;
 				end
+				else if(modify) begin
+					Cache_NS = S_WB_1;
+				end
+				else if(~valid) begin
+					Cache_NS = S_ERROR;
+				end
 				else begin
-					Cache_NS = C_CMP;
+					Cache_NS = S_RUN;
 				end
 			end
 			S_FETCH_1: begin//wait ready
-				if(m_ready) begin 
+				if(m_rready) begin 
 					Cache_NS = S_FETCH_2;
 				end
 				else begin
@@ -141,90 +141,85 @@ module objectCache #(
 				end
 			end
 			S_FETCH_2: begin//wait data
-				if(m_rdata_valid) begin
-					
-					Cache_NS = S_FETCH_3;
+				if(m_rdata_valid&(s_ren|s_wen)) begin					
+					Cache_NS = S_RUN;
 				end
 				else begin
 					Cache_NS = S_FETCH_2;
 				end
 			end			
-			S_HIT: begin
-				Cache_NS = S_IDLE;
-			end
+			S_WB_1:begin
+				if(m_wready) begin 
+					Cache_NS = S_FETCH_1;
+				end
+				else begin
+					Cache_NS = S_WB_1;
+				end				
+			end	
 		endcase
 	end
 	always @ (posedge aclk) begin
-		if(~resetn) begin
-			Cache_CS <= S_IDLE;
+		if(~aresetn) begin
+			Cache_CS <= S_RUN;
 		end
 		else begin
 			Cache_CS <= Cache_NS;
 		end
-	end
-	
-	
-	genvar i;
-	reg [WORD_SIZE_BYTE*8-1:0] readdata_buf[LINE_SIZE_BYTE/WORD_SIZE_BYTE-1:0];
-	reg word_en_buf [LINE_SIZE_BYTE/WORD_SIZE_BYTE-1:0];
+	end	
+	//read hit
+	wire [WORD_SIZE_BYTE*8-1:0] readdata_wire[LINE_SIZE_BYTE/WORD_SIZE_BYTE-1:0];
+	wire [LINE_SIZE_BYTE*8-1:0] writedata_wire;
+	wire [LINE_SIZE_BYTE*8-1:0] fetched_data;
+										  
+	wire [LINE_SIZE_BYTE/WORD_SIZE_BYTE-1:0] word_en_wire;
+
+    genvar i;
 	generate
 	for (i=0 ; i<LINE_SIZE_BYTE/WORD_SIZE_BYTE ; i=i+1) begin
-	always @ (posedge aclk) begin
-		if(~resetn) begin
-			writedata_buf[(i+1)*WORD_SIZE_BYTE*8-1:i*WORD_SIZE_BYTE*8] <= {(WORD_SIZE_BYTE*8)1'b0};
-			word_en_buf[i]=1'b0;
-		end
-		else begin
-			if(Cache_CS[S_IDLE]) begin//write hit
-				writedata_buf[(i+1)*WORD_SIZE_BYTE*8-1:i*WORD_SIZE_BYTE*8] <= s_wdata;
-				word_en_buf[i] <= (s_addr[WORD_OFFSET-1:0]==i);
-			end
-		end
-	end	
-	assign word_en[i] = word_en_buf[i];
-	always @ (posedge aclk) begin
-		if(~resetn) begin
-			readdata_buf[i] <= {(WORD_SIZE_BYTE*8)1'b0}
-		end
-		else begin
-			if(Cache_CS[CMP]) begin//read hit
-				readdata_buf[i] <= readdata[(i+1)*WORD_SIZE_BYTE*8-1:i*WORD_SIZE_BYTE*8];
-			end
-		end
-	end	
+		assign readdata_wire[i] = Cache_CS[S_RUN_BIT]?readdata[(i+1)*WORD_SIZE_BYTE*8-1:i*WORD_SIZE_BYTE*8]:m_rdata[(i+1)*WORD_SIZE_BYTE*8-1:i*WORD_SIZE_BYTE*8];
+		assign writedata_wire[(i+1)*WORD_SIZE_BYTE*8-1:i*WORD_SIZE_BYTE*8] = s_wdata;
+		assign word_en_wire[i] = (s_addr[WORD_OFFSET+BYTE_OFFSET-1:BYTE_OFFSET]==i);					
+		assign fetched_data[(i+1)*WORD_SIZE_BYTE*8-1:i*WORD_SIZE_BYTE*8] = ((s_addr[WORD_OFFSET-1:0]==i)&&(s_wen))?s_wdata:m_rdata[(i+1)*WORD_SIZE_BYTE*8-1:i*WORD_SIZE_BYTE*8];		//for write miss												 
+	end
 	endgenerate
-	assign s_rdata = readdata_buf[s_addr[WORD_OFFSET-1:0]];
+	assign s_rdata = readdata_wire[s_addr[WORD_OFFSET+BYTE_OFFSET-1:BYTE_OFFSET]];
+	assign s_data_valid = (Cache_CS[S_RUN_BIT]?hit:(Cache_CS[S_FETCH_2_BIT]?m_rdata_valid:0))&&s_ren;
+	assign hit_write = Cache_CS[S_RUN_BIT]&&hit&&s_wen;
+	assign o_tag = (Cache_CS[S_RUN_BIT]|Cache_CS[S_WB_1_BIT]) ? s_addr[ADDR_WIDTH-1:NUM_ENTRY_BIT+LINE_SIZE_BIT]:m_raddr[ADDR_WIDTH-1:NUM_ENTRY_BIT+LINE_SIZE_BIT];
+	assign entry = (Cache_CS[S_RUN_BIT]|Cache_CS[S_WB_1_BIT]) ? s_addr[NUM_ENTRY_BIT+LINE_SIZE_BIT-1:LINE_SIZE_BIT]:m_raddr[NUM_ENTRY_BIT+LINE_SIZE_BIT-1:LINE_SIZE_BIT];	
+	assign writedata = Cache_CS[S_RUN_BIT]?writedata_wire:fetched_data;
+	assign byte_en = {(WORD_SIZE_BYTE){1'b1}};
+	assign set_write = Cache_CS[S_RUN_BIT]?hit_write:m_rdata_valid;
+	assign word_en = Cache_CS[S_RUN_BIT]?word_en_wire:((Cache_CS[S_FETCH_2_BIT]&&m_rdata_valid)?{(LINE_SIZE_BYTE/WORD_SIZE_BYTE){1'b1}}:0);
+	
+	
+	
 	always @ (posedge aclk) begin
-		if(~resetn) begin
-			s_data_valid <= 1'b0;
-			hit_write <= 1'b0;
-			s_ren_buf <= 1'b0;
-			s_wen_buf <= 1'b0;
+		if(~aresetn) begin
+			m_ren <= 1'b0;
+			m_raddr <= {(ADDR_WIDTH){1'b0}};
+			m_waddr <= {(ADDR_WIDTH){1'b0}};
+			m_wen <= 1'b0;
 		end
-		else begin			
-			if(Cache_CS[C_IDLE]) begin
-				s_ren_buf <= s_ren;
-				s_wen_buf <= s_wen;
+		else begin
+			if(Cache_NS[S_FETCH_1_BIT]) begin
+				m_ren <= 1'b1;
+				m_raddr <= s_addr;
+				m_wen <= 1'b0;
+			end
+			else if(Cache_NS[S_WB_1_BIT]) begin
+				m_ren <= 1'b0;
+				m_waddr <= wb_addr;
+				m_wen <= 1'b1;				
 			end
 			else begin
-				s_ren_buf <= s_ren_buf;
-				s_wen_buf <= s_wen_buf;
+				m_ren <= 1'b0;
+				m_raddr <= m_raddr;	
+				m_waddr <= m_waddr;	
+				m_wen <= 1'b0;				
 			end
-			
-			if(Cache_NS[C_HIT]&&(s_wen_buf||s_ren_buf)) begin
-				s_data_valid <= 1'b1;
-				if(s_wen_buf) begin
-					hit_write <= 1'b1;
-				end
-			end
-			else begin
-				s_data_valid <= 1'b0;
-				hit_write <= 1'b0;
-			end
-			
 		end
 	end
-	
 	
 	
 	
@@ -235,16 +230,18 @@ module set # (
 	parameter integer LINE_SIZE_BYTE = 64,
 	parameter integer ADDR_WIDTH = 40,
 	parameter integer NUM_ENTRY_BIT = 1,
-)(
+	parameter integer LINE_SIZE_BIT = `C_LOG_2(LINE_SIZE_BYTE)
+) (
 	input wire aclk,
 	input wire aresetn,
 	input wire [NUM_ENTRY_BIT-1:0] entry,
-	input wire [ADDR_WIDTH-NUM_ENTRY_BIT-1:0] o_tag,
+	input wire [ADDR_WIDTH-NUM_ENTRY_BIT-LINE_SIZE_BIT-1:0] o_tag,
 	input wire [LINE_SIZE_BYTE*8-1:0] writedata,
 	input wire [WORD_SIZE_BYTE-1:0] byte_en,
 	input wire write,
 	input wire [LINE_SIZE_BYTE/WORD_SIZE_BYTE-1:0] word_en,
 	output wire [LINE_SIZE_BYTE*8-1:0] readdata,
+	output wire [ADDR_WIDTH-1:0] wb_addr,
 	output wire hit,
 	output wire modify,
 	output wire miss,
@@ -252,28 +249,57 @@ module set # (
 	input wire read_miss,
 	input wire invalid
 );
-	wire [ADDR_WIDTH-NUM_ENTRY_BIT-1:0] i_tag;
+	wire [ADDR_WIDTH-NUM_ENTRY_BIT-LINE_SIZE_BIT-1:0] i_tag;
 	wire dirty;
-	wire [ADDR_WIDTH-NUM_ENTRY_BIT-1+2:0] write_tag_entry;
+	wire [ADDR_WIDTH-NUM_ENTRY_BIT-LINE_SIZE_BIT-1+2:0] write_tag_entry;
+	
+	assign wb_addr = {i_tag, entry};
+	
+    assign hit = valid && (o_tag == i_tag);
+    assign modify = valid && (o_tag != i_tag) && dirty; //if line eviction is occurred, it must writeback
+    assign miss = !valid || ((o_tag != i_tag) && !dirty); //miss occurr and don't need to writeback
+	
 	genvar i,j;
 	generate
 	for(i=0 ; i<LINE_SIZE_BYTE/WORD_SIZE_BYTE ; i=i+1) begin:MAKE_LINE
 		for(j=0 ; j<WORD_SIZE_BYTE ; j=j+1) begin:MAKE_WORD
-			simple_ram #(.width(8), .widthad(NUM_ENTRY_BIT)) byte_ram(.clk(aclk), .wraddress(entry), .wren(write&&word_en[i]&&byte_en[j]), .data(writedata[((j+1)*8+i*WORD_SIZE_BYTE*8):(j*8+i*WORD_SIZE_BYTE*8)]), .rdaddress(entry), .q(readdata[((j+1)*8+i*WORD_SIZE_BYTE*8):(j*8+i*WORD_SIZE_BYTE*8)]));
+			simple_ram #(.width(8), .widthad(NUM_ENTRY_BIT)
+			) byte_ram (
+			     .clk(aclk),
+			     .wraddress(entry),
+			     .wren(write&&word_en[i]&&byte_en[j]),
+			     .data(writedata[((j+1)*8+i*WORD_SIZE_BYTE*8):(j*8+i*WORD_SIZE_BYTE*8)]), 
+			     .rdaddress(entry), 
+			     .q(readdata[((j+1)*8+i*WORD_SIZE_BYTE*8):(j*8+i*WORD_SIZE_BYTE*8)])
+			);
 		end
 	end
 	endgenerate
 	//write_tag_entry = {dirty, valid, tag}
-	assign write_tag_entry = (invalid)? {1'b0, 1'b0, {(ADDR_WIDTH-NUM_ENTRY_BIT){1'b0}}} :(read_miss) ? {1'b0, 1'b1, o_tag} : (modify || miss ) ? {1'b1, 1'b1, o_tag} : {1'b1, 1'b1, i_tag};
-	simple_ram #(.width(ADDR_WIDTH-NUM_ENTRY_BIT-1+2), .widthad(NUM_ENTRY_BIT)) ram_tag(aclk, entry, write, write_tag_entry, entry, {dirty, valid, i_tag});
+	assign write_tag_entry = (invalid)? {1'b0, 1'b0, {(ADDR_WIDTH-NUM_ENTRY_BIT-LINE_SIZE_BIT){1'b0}}} : //if invalid set zeros
+								(read_miss) ? {1'b0, 1'b1, o_tag} : //if read miss 
+								(modify || miss ) ? {1'b1, 1'b1, o_tag} : //write miss
+									{1'b1, 1'b1, i_tag}; //write hit?
 	
-`ifdef SIM
+	simple_ram #(
+	   .width(ADDR_WIDTH-NUM_ENTRY_BIT-LINE_SIZE_BIT+2),
+	   .widthad(NUM_ENTRY_BIT)
+	) ram_tag (
+	   .clk(aclk), 
+	   .wraddress(entry), 
+	   .wren(write), 
+	   .data(write_tag_entry), 
+	   .rdaddress(entry), 
+	   .q({dirty, valid, i_tag})
+	);
+	
+
     integer k;
 
     initial begin
-        for(k = 0; k <=(2**cache_entry-1); k=k+1) begin
-	        ram_tag.mem[k] = 0;
+        for(k = 0; k <=(NUM_ENTRY_BIT); k=k+1) begin
+	        ram_tag.mem[k] = {2'b0,{(ADDR_WIDTH-NUM_ENTRY_BIT-LINE_SIZE_BIT-1){1'b1}}};
         end
     end
-`endif
+	  
 endmodule

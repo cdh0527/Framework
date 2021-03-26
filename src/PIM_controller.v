@@ -1,12 +1,10 @@
+`timescale 1ns / 1ps
 //--------------------------------------------------------------------------------
 //Tool Version: Vivado v.2019.1 (win64) 
 //Date        : 2021-02-02
 //Host        : Duheon
 //Design      : PIM_controller
-//Version     : 0.1
-//--------------------------------------------------------------------------------
-//Generate log
-//Data        : 
+//Version     : 0.2
 //--------------------------------------------------------------------------------
 
 module PIM_controller# (
@@ -18,9 +16,12 @@ module PIM_controller# (
 	parameter integer MMR_SIZE = 1024,	
 	parameter integer STATE_BIT = 5
   )(
-	input wire clk,
+	input wire aclk,
 	input wire resetn,
 	input wire [31:0] PIM_cmd,
+	input wire PE_done,
+	input wire wb_empty,
+	input wire cache_empty,
 	output wire finish,
 	output wire PE_start,
 	output wire cl_flush
@@ -40,7 +41,6 @@ module PIM_controller# (
 		STATE_ERROR_BIT = 4;		
 	reg [STATE_BIT-1:0] PIM_CS_fsm;
 	reg [STATE_BIT-1:0] PIM_NS_fsm;
-	wire finish;
 	
 	always@(*) begin
 		case(PIM_CS_fsm)
@@ -72,13 +72,13 @@ module PIM_controller# (
 				PIM_NS_fsm = STATE_READY;
 			end
 			STATE_ERROR:begin
-				STATE_ERROR = STATE_FINISH;
+				PIM_NS_fsm = STATE_FINISH;
 			end
-		end
+		endcase
 	end
 	
 	always @ (posedge aclk) begin
-		if(~reset) begin
+		if(~resetn) begin
 			PIM_CS_fsm <= STATE_READY;
 		end
 		else begin
@@ -90,3 +90,4 @@ module PIM_controller# (
 	assign PE_start = (PIM_CS_fsm[STATE_RUN_BIT] == 1);
 	assign cl_flush = (PIM_CS_fsm[STATE_CLFLUSH_BIT] == 1);
 endmodule
+
