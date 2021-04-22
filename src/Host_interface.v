@@ -1,6 +1,6 @@
 //--------------------------------------------------------------------------------
 //Tool Version: Vivado v.2019.1 (win64) 
-//Date        : 2021-01-29
+//Date        : 2021-03-02
 //Host        : Duheon
 //Design      : Host_interface
 //Version     : 0.2
@@ -43,7 +43,8 @@
 		parameter integer PAGETABLE_INDEX_BIT = `C_LOG_2(PAGETABLE_INDEX),		
 		parameter integer MMR_LINE_WIDTH = C_S_AXI_DATA_WIDTH,
 		parameter integer MMR_INDEX = MMR_SIZE/MMR_LINE_WIDTH,
-		parameter integer MMR_INDEX_BIT = `C_LOG_2(MMR_INDEX)		
+		parameter integer MMR_INDEX_BIT = `C_LOG_2(MMR_INDEX),
+		parameter integer PE_ADDR_WIDTH = 40		/// need to fix, 
 		
 	)
 	(
@@ -95,10 +96,15 @@
 		input wire S_AXI_RREADY,
 		//!pim_port begin
 		input wire [MMR_SIZE-1:0] out_argu,
-		input wire pt_ren,
-		input wire [PAGETABLE_INDEX_BIT-1:0] pt_raddr,
+		input wire rp_pt_ren,
+		input wire [PAGETABLE_INDEX_BIT-1:0] rp_pt_raddr,
+		output wire [PAGETABLE_LINE_WIDTH-1:0] rp_pt_rdata,
+		input wire wp_pt_ren,
+		input wire [PAGETABLE_INDEX_BIT-1:0] wp_pt_raddr,
+		output wire [PAGETABLE_LINE_WIDTH-1:0] wp_pt_rdata,
+		
 		input wire [1:0] pim_state,
-		output reg [PAGETABLE_LINE_WIDTH-1:0] pt_rdata,
+		
 		output reg [MMR_SIZE-1:0] in_argu
 		//!pim_port end
 	);
@@ -565,6 +571,9 @@
 	end
 	endgenerate
 	
+	assign rp_pt_rdata = rp_pt_ren?pt[rp_pt_raddr]:'b1;
+	assign wp_pt_rdata = rp_pt_ren?pt[wp_pt_raddr]:'b1;
+	/* pt_data register version
 	always @( posedge S_AXI_ACLK )
 	begin
 		if(pt_ren) begin
@@ -573,7 +582,7 @@
 		else begin
 			pt_rdata <= {PAGETABLE_LINE_WIDTH{1'b0}};
 		end
-	end
+	end*/
 
 	always @( posedge S_AXI_ACLK)
 	begin

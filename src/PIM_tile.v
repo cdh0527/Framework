@@ -144,9 +144,12 @@ module PIM_tile# (
   NDP_wstrb,
   NDP_wvalid
   );
+  ////!parameter define!begin
   localparam MMR_STRB_BIT = MMR_AXI_DATA_WIDTH/8;
   localparam NDP_STRB_BIT = NDP_AXI_DATA_WIDTH/8;
+  ////!parameter define!end
   
+  ////!fixed define!begin
   input aclk;
   input resetn;
   input [MMR_AXI_DATA_WIDTH-1:0]MMR_REBUG_araddr;
@@ -184,7 +187,7 @@ module PIM_tile# (
   output MMR_REBUG_wready;
   input [MMR_STRB_BIT-1:0]MMR_REBUG_wstrb;
   input MMR_REBUG_wvalid;
-  input [MMR_AXI_DATA_WIDTH-1:0]MMR_araddr;
+  input [MMR_AXI_ADDR_WIDTH-1:0]MMR_araddr;
   input [1:0]MMR_arburst;
   input [3:0]MMR_arcache;
   input [7:0]MMR_arlen;
@@ -195,7 +198,7 @@ module PIM_tile# (
   input [3:0]MMR_arregion;
   input [2:0]MMR_arsize;
   input MMR_arvalid;
-  input [MMR_AXI_DATA_WIDTH-1:0]MMR_awaddr;
+  input [MMR_AXI_ADDR_WIDTH-1:0]MMR_awaddr;
   input [1:0]MMR_awburst;
   input [3:0]MMR_awcache;
   input [7:0]MMR_awlen;
@@ -209,12 +212,12 @@ module PIM_tile# (
   input MMR_bready;
   output [1:0]MMR_bresp;
   output MMR_bvalid;
-  output [63:0]MMR_rdata;
+  output [MMR_AXI_DATA_WIDTH-1:0]MMR_rdata;
   output MMR_rlast;
   input MMR_rready;
   output [1:0]MMR_rresp;
   output MMR_rvalid;
-  input [63:0]MMR_wdata;
+  input [MMR_AXI_DATA_WIDTH-1:0]MMR_wdata;
   input MMR_wlast;
   output MMR_wready;
   input [MMR_STRB_BIT-1:0]MMR_wstrb;
@@ -256,8 +259,32 @@ module PIM_tile# (
   input NDP_wready;
   output [NDP_STRB_BIT-1:0]NDP_wstrb;
   output NDP_wvalid;
-  
   wire [MMR_SIZE-1:0] in_argu;
+  wire [63:0] argu_64 [7:0];
+  wire [31:0] argu_32 [15:0];
+  genvar i;
+  generate
+	for(i=0 ; i<16 ; i=i+1) begin
+		assign argu_32[i] = in_argu[(i+1)*32:i*32];
+	end
+	for(i=0 ; i<8 ; i=i+1) begin
+		assign argu_64[i] = in_argu[(i+1)*64+MMR_SIZE/2:i*64+MMR_SIZE/2];
+	end
+  endgenerate    
+  wire PIM_cmd = argu_32[15];
+  wire PE_done;
+  wire wb_empty;
+  wire cache_empty;
+  wire finish;
+  wire PE_start;
+  wire cl_flush;  
+  ////!fixed define!end
+  
+  ////!wire define!begin
+  ////!wire define!end
+  ////!reg define!begin
+  ////!reg define!end
+  ////!Host_interface!begin
   Host_interface # (
   )h_interface_inst(
     .S_AXI_ACLK    (aclk),
@@ -313,25 +340,9 @@ module PIM_tile# (
     .pt_rdata      (),
     .in_argu       (in_argu)
   );
-  wire [63:0] argu_64 [7:0];
-  wire [31:0] argu_32 [15:0];
-  genvar i;
-  generate
-	for(i=0 ; i<16 ; i=i+1) begin
-		assign argu_32[i] = in_argu[(i+1)*32:i*32];
-	end
-	for(i=0 ; i<8 ; i=i+1) begin
-		assign argu_64[i] = in_argu[(i+1)*64+MMR_SIZE/2:i*64+MMR_SIZE/2];
-	end
-  endgenerate  
-  wire PIM_cmd = argu_32[15];
-  wire PE_done;
-  wire wb_empty;
-  wire cache_empty;
-  wire finish;
-  wire PE_start;
-  wire cl_flush;
+  ////!Host_interface!end
   
+  ////!PIM_controller!begin
   PIM_controller PIM_controller_inst(
     .aclk(aclk),
     .resetn(resetn),
@@ -343,4 +354,5 @@ module PIM_tile# (
     .PE_start(PE_start),
     .cl_flush(cl_flush)
   );
+  ////!PIM_controller!end
 endmodule

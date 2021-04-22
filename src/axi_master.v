@@ -18,8 +18,12 @@ module axi_master #
 	   The resulting ERROR flag will not be useful */ 
 	parameter integer C_M_AXI_SUPPORTS_WRITE         = 1,
 	parameter integer C_M_AXI_SUPPORTS_READ         = 1,
-		parameter integer C_M_AXI_AWUSER_WIDTH	= 0,
 	parameter integer C_M_AXI_ID_WIDTH = 5,
+	parameter integer C_M_AXI_AWUSER_WIDTH	= 0,
+	parameter integer C_M_AXI_ARUSER_WIDTH	= 0,
+	parameter integer C_M_AXI_WUSER_WIDTH	= 0,
+	parameter integer C_M_AXI_RUSER_WIDTH	= 0,
+	parameter integer C_M_AXI_BUSER_WIDTH	= 0,		
 	   
 	/* Max count of written but not yet read bursts.
 		If the interconnect/slave is able to accept enough
@@ -47,7 +51,7 @@ module axi_master #
 	parameter integer BITS_PER_BYTE = 8,
 	parameter integer C_OFFSET_WIDTH = `C_LOG_2(C_LINE_SIZE/BITS_PER_BYTE),
 	
-	parameter integer NDP_ID = 1,
+	parameter integer NDP_ID = 1
    )
    (
     // System Signals
@@ -115,6 +119,7 @@ module axi_master #
     input wire [C_M_AXI_ADDR_WIDTH-1:0] APB_RADDR,
     output reg [C_LINE_SIZE-1:0] APB_RDATA,
     input wire APB_RENABLE,
+    output reg APB_RVALID,
     output reg APB_RREADY
     ); 
     reg [C_M_AXI_ADDR_WIDTH-1:0] write_addr;

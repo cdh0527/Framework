@@ -160,15 +160,15 @@ module oc_tb(
 	assign m_rdata = m_raddr;
 	assign s_wdata = s_addr;
 	
-	objectCache oc(
+	objectCache_v3 oc(
 	.aclk			(aclk),
 	.aresetn        (aresetn),
-	.s_addr         (s_addr),
-	.s_wdata        (s_wdata),
-	.s_ren          (s_ren),
-	.s_wen          (s_wen),
-	.s_rdata        (s_rdata),
-	.s_data_valid   (s_data_valid),
+	.p_addr         (s_addr),
+	.p_wdata        (s_wdata),
+	.p_ren          (s_ren),
+	.p_wen          (s_wen),
+	.p_rdata        (s_rdata),
+	.p_data_valid   (s_data_valid),
 	.m_raddr        (m_raddr),
 	.m_waddr		(m_waddr),	
 	.m_wdata        (m_wdata),
@@ -177,7 +177,9 @@ module oc_tb(
 	.m_rdata        (m_rdata),
 	.m_rdata_valid  (1),
 	.m_rready       (1),
-	.m_wready	    (1)
+	.m_wready	    (1),
+	.c_flush_complete (),
+	.c_flush (0)
 	);
 endmodule
 	

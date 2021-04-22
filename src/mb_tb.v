@@ -97,7 +97,8 @@ module mb_tb#(
 		s_rdata <= 512'h5678901234;
 		s_rdata_valid <= 1;
 		#2
-		s_rdata_valid <= 0	end
+		s_rdata_valid <= 0;
+		end
 
 mem_bus mb_inst(
 	.aclk			(aclk),								

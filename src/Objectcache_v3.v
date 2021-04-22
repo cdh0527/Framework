@@ -24,7 +24,7 @@
 (n) <= (1<<28) ? 28 : (n) <= (1<<29) ? 29 :\
 (n) <= (1<<30) ? 30 : (n) <= (1<<31) ? 31 : 32)
 
-module objectCache #(
+module objectCache_v3 #(
 	parameter integer WORD_SIZE_BYTE = 4,
 	parameter integer WORD_SIZE_BYTE_BIT = $clog2(WORD_SIZE_BYTE),
 	parameter integer LINE_SIZE_BYTE = 64,
@@ -53,9 +53,12 @@ module objectCache #(
 	input wire [LINE_SIZE-1:0] m_rdata,
 	input wire m_rdata_valid,
 	input wire m_rready,
-	input wire m_wready
+	input wire m_wready,
+	//control port
+	output reg c_finish_complete,
+	input c_finish
 );
-	localparam STATE_BIT = 8;
+	localparam STATE_BIT = 10;
 	localparam [STATE_BIT-1:0]
 		S_RUN = 1,
 		S_FETCH_1 = 2,
@@ -63,7 +66,10 @@ module objectCache #(
 		S_FETCH_3 = 8,
 		S_WB_1 = 16,
 		S_WB_2 = 32,
-		S_ERROR = 64;
+		S_FLUSH = 64,
+		S_FINISH = 128,
+		S_INVALID = 256,
+		S_ERROR = 512;
 	localparam [STATE_BIT-1:0]
 		S_RUN_BIT = 0,
 		S_FETCH_1_BIT = 1,
@@ -71,13 +77,17 @@ module objectCache #(
 		S_FETCH_3_BIT = 3,
 		S_WB_1_BIT = 4,
 		S_WB_2_BIT = 5,
-		S_ERROR_BIT = 6;	
+		S_FLUSH_BIT = 6,
+		S_FINISH_BIT = 7,
+		S_INVALID_BIT = 8,
+		S_ERROR_BIT = 9;
 	localparam WORD_OFFSET = `C_LOG_2(LINE_SIZE_BYTE/WORD_SIZE_BYTE);
 	localparam BYTE_OFFSET = `C_LOG_2(WORD_SIZE_BYTE);
 	localparam LINE_SIZE_BIT = `C_LOG_2(LINE_SIZE_BYTE);
+	localparam MAX_ENRTY = (2**NUM_ENTRY_BIT);
 	
 	wire [PE_ADDR_WIDTH-1:0] p_addr_shift = p_addr << WORD_SIZE_BYTE_BIT;
-	wire [NUM_ENTRY_BIT-1:0] entry;
+	wire [NUM_ENTRY_BIT-1:0] entry, run_entry;
 	wire [PE_ADDR_WIDTH-NUM_ENTRY_BIT-LINE_SIZE_BIT-1:0] o_tag;
 	wire [LINE_SIZE_BYTE*8-1:0] writedata;
 	wire [WORD_SIZE_BYTE-1:0] byte_en;
@@ -90,6 +100,13 @@ module objectCache #(
 	wire valid;
 	wire read_miss;
 	wire set_write, hit_write;
+	wire invalid;
+	wire dirty;
+
+	reg finish_mode;
+	reg [NUM_ENTRY_BIT:0] flush_entry;
+
+	assign entry = finish_mode ? flush_entry : run_entry;
 		
 	set #(
 		.WORD_SIZE_BYTE(WORD_SIZE_BYTE),
@@ -112,51 +129,88 @@ module objectCache #(
 		.modify     (modify),
 		.miss       (miss),
 		.valid      (valid),
+		.dirty      (dirty),
 		.read_miss	((p_ren&&!p_wen)),
-		.invalid    (1'b0)
+		.invalid    (invalid)
 	);
 	
 	reg [STATE_BIT-1:0] Cache_CS, Cache_NS;
 	always @(*) begin	
 		case(Cache_CS)
 			S_RUN: begin
-				if(miss) begin
-					Cache_NS = S_FETCH_1;
-				end
-				else if(modify) begin
-					Cache_NS = S_WB_1;
-				end
-				else if(~valid) begin
-					Cache_NS = S_ERROR;
+			    if((c_finish||finish_mode)&&(flush_entry==0)) begin
+					Cache_NS = S_FINISH;
 				end
 				else begin
-					Cache_NS = S_RUN;
+				    if(miss&(p_ren|p_wen)) begin
+				    	Cache_NS = S_FETCH_1;
+				    end
+				    else if(modify&(p_ren|p_wen)) begin
+				    	Cache_NS = S_WB_1;
+				    end
+				    else begin
+				    	Cache_NS = S_RUN;
+				    end
 				end
 			end
 			S_FETCH_1: begin//wait ready
-				if(m_rready) begin 
-					Cache_NS = S_FETCH_2;
+				if(c_finish||finish_mode) begin
+				    Cache_NS = S_RUN;
 				end
 				else begin
-					Cache_NS = S_FETCH_1;
+				    if(m_rready) begin 
+				    	Cache_NS = S_FETCH_2;
+				    end
+				    else begin
+				    	Cache_NS = S_FETCH_1;
+				    end
 				end
 			end
 			S_FETCH_2: begin//wait data
-				if(m_rdata_valid&(p_ren|p_wen)) begin					
-					Cache_NS = S_RUN;
-				end
+				if(c_finish||finish_mode) begin
+				    Cache_NS = S_RUN;
+				end			
 				else begin
-					Cache_NS = S_FETCH_2;
+				    if(m_rdata_valid&(p_ren|p_wen)) begin					
+				    	Cache_NS = S_RUN;
+				    end
+				    else begin
+				    	Cache_NS = S_FETCH_2;
+				    end
 				end
 			end			
 			S_WB_1:begin
 				if(m_wready) begin 
-					Cache_NS = S_FETCH_1;
+					if(finish_mode) begin
+						Cache_NS = S_INVALID;
+					end
+					else begin
+						Cache_NS = S_FETCH_1;
+					end
 				end
 				else begin
 					Cache_NS = S_WB_1;
 				end				
 			end	
+			S_FINISH: begin
+				if(flush_entry == MAX_ENRTY) begin
+					Cache_NS = S_RUN;
+				end
+				else begin
+					Cache_NS = S_FLUSH;
+				end
+			end
+			S_FLUSH: begin
+				if(dirty) begin
+					Cache_NS = S_WB_1;
+				end
+				else begin
+					Cache_NS = S_INVALID;
+				end
+			end
+			S_INVALID: begin
+				Cache_NS = S_FINISH;
+			end
 		endcase
 	end
 	always @ (posedge aclk) begin
@@ -187,47 +241,87 @@ module objectCache #(
 	assign p_data_valid = (Cache_CS[S_RUN_BIT]?hit:(Cache_CS[S_FETCH_2_BIT]?m_rdata_valid:0))&&p_ren;
 	assign hit_write = Cache_CS[S_RUN_BIT]&&hit&&p_wen;
 	assign o_tag = (Cache_CS[S_RUN_BIT]|Cache_CS[S_WB_1_BIT]) ? p_addr_shift[PE_ADDR_WIDTH-1:NUM_ENTRY_BIT+LINE_SIZE_BIT]:m_raddr[PE_ADDR_WIDTH-1:NUM_ENTRY_BIT+LINE_SIZE_BIT];
-	assign entry = (Cache_CS[S_RUN_BIT]|Cache_CS[S_WB_1_BIT]) ? p_addr_shift[NUM_ENTRY_BIT+LINE_SIZE_BIT-1:LINE_SIZE_BIT]:m_raddr[NUM_ENTRY_BIT+LINE_SIZE_BIT-1:LINE_SIZE_BIT];	
+	assign run_entry = (Cache_CS[S_RUN_BIT]|Cache_CS[S_WB_1_BIT]) ? p_addr_shift[NUM_ENTRY_BIT+LINE_SIZE_BIT-1:LINE_SIZE_BIT]:(finish_mode)?flush_entry:m_raddr[NUM_ENTRY_BIT+LINE_SIZE_BIT-1:LINE_SIZE_BIT];	
 	assign writedata = Cache_CS[S_RUN_BIT]?writedata_wire:fetched_data;
 	assign byte_en = {(WORD_SIZE_BYTE){1'b1}};
-	assign set_write = Cache_CS[S_RUN_BIT]?hit_write:m_rdata_valid;
+	assign set_write = finish_mode?invalid:(Cache_CS[S_RUN_BIT]?hit_write:m_rdata_valid);
 	assign word_en = Cache_CS[S_RUN_BIT]?word_en_wire:((Cache_CS[S_FETCH_2_BIT]&&m_rdata_valid)?{(LINE_SIZE_BYTE/WORD_SIZE_BYTE){1'b1}}:0);
-	
-	
-	
+		
 	always @ (posedge aclk) begin
-		if(~aresetn) begin
-			m_ren <= 1'b0;
-			m_raddr <= {(PE_ADDR_WIDTH){1'b0}};
-			m_waddr <= {(PE_ADDR_WIDTH){1'b0}};
+		if(~aresetn) begin	
+			m_ren <= 'b0;
+			m_raddr <= 'b0;
+		end
+		else begin
+			if(Cache_NS[S_FETCH_1_BIT]&&!Cache_CS[S_FETCH_1_BIT]) begin
+				m_ren <= 1'b1;
+				m_raddr <= p_addr_shift;			
+			end
+			else if(Cache_NS[S_RUN_BIT]||(Cache_NS[S_FETCH_2_BIT]&&!Cache_CS[S_FETCH_2_BIT])) begin
+				m_ren <= 1'b0;
+				m_raddr <= m_raddr;
+			end
+			else begin
+				m_ren <= m_ren;
+				m_raddr <= m_raddr;
+			end
+		end
+	end
+	always @ (posedge aclk) begin
+		if(~aresetn) begin	
 			m_wen <= 1'b0;
+			m_waddr <= 'b0;
 			m_wdata <= 'b0;
 		end
 		else begin
-			if(Cache_NS[S_FETCH_1_BIT]) begin
-				m_ren <= 1'b1;
-				m_raddr <= p_addr_shift;
-				m_wen <= 1'b0;
-				m_wdata <= m_wdata;
-			end
-			else if(Cache_NS[S_WB_1_BIT]) begin
-				m_ren <= 1'b0;
+			if(Cache_NS[S_WB_1_BIT]&&!Cache_CS[S_WB_1_BIT]) begin
+				m_wen <= 1'b1;
 				m_waddr <= wb_addr<<LINE_SIZE_BIT;
 				m_wdata <= readdata;
-				m_wen <= 1'b1;				
+			end
+			else if(!Cache_NS[S_WB_1_BIT]&&Cache_CS[S_WB_1_BIT]) begin
+				m_wen <= 1'b0;	
+				m_waddr <= m_waddr;
+				m_wdata <= m_wdata;
 			end
 			else begin
-				m_ren <= 1'b0;
-				m_raddr <= m_raddr;	
-				m_waddr <= m_waddr;	
-				m_wen <= 1'b0;
+				m_wen <= m_wen;
+				m_waddr <= m_waddr;
 				m_wdata <= m_wdata;
 			end
 		end
 	end
-	
-	
-	
+	//for finish state
+	always @ (posedge aclk) begin
+		if(~aresetn) begin	
+			finish_mode <= 'b0;
+			c_finish_complete <= 'b0;
+		end
+		else if(Cache_NS[S_FINISH_BIT]&&Cache_CS[S_RUN_BIT]) begin
+			finish_mode <= 1;
+			c_finish_complete <= 0;
+		end
+		else if(Cache_NS[S_RUN_BIT]&&Cache_CS[S_FINISH_BIT]) begin
+			finish_mode <= 0;
+			c_finish_complete <= 1;
+		end
+		else begin
+			finish_mode <= finish_mode;
+			c_finish_complete <= 0;
+		end
+	end
+	always @ (posedge aclk) begin
+		if(~aresetn||Cache_CS[S_RUN_BIT]) begin		
+			flush_entry <= 'b0;
+		end
+		else begin
+			if(Cache_NS[S_FINISH_BIT]&&(Cache_CS[S_INVALID_BIT])) begin
+				flush_entry <= flush_entry+1;
+			end
+		end
+	end
+	assign invalid = Cache_CS[S_INVALID_BIT]&&finish_mode;
+
 endmodule
 
 module set # (
@@ -251,11 +345,11 @@ module set # (
 	output wire modify,
 	output wire miss,
 	output wire valid,
+	output wire dirty,
 	input wire read_miss,
 	input wire invalid
 );
 	wire [PE_ADDR_WIDTH-NUM_ENTRY_BIT-LINE_SIZE_BIT-1:0] i_tag;
-	wire dirty;
 	wire [PE_ADDR_WIDTH-NUM_ENTRY_BIT-LINE_SIZE_BIT-1+2:0] write_tag_entry;
 	
 	assign wb_addr = {i_tag, entry};
